@@ -15,64 +15,45 @@ Generates PSTH
 import numpy as np
 from matplotlib import pyplot as plt
 import scipy.io as sio
-from scipy import signal
 import pandas as pd
-from scipy.signal import savgol_filter
-from scipy.signal import butter, lfilter
 from scipy.signal import gaussian
 from scipy.ndimage import filters
-from sklearn import mixture#
 from glob import glob as glob
 import os
 from neo import io
-from scipy.ndimage import gaussian_filter1d
 import h5py
 
-def getData(data_path,out_path,animal_id):
+
+def getData(data_path,out_path,animal_id,tmin,tmax):
     '''
     Data preprocessing function
     loads spike times and meta data
     alignment of spikes to stimulus onsets
+
+    Input:
+    tmin,tmax: sec, used to extract spike times around each stimulus
     '''
     sf = 30000; # sampling frequency
-    tmin = -.4 #s, before each stim
-    tmax = 1.6 #s, after each stim
     
-    dates = os.listdir(data_path)
-    dates = np.sort([dates[i] for i in range(len(dates)) if dates[i][0]=='2']) # filter
-    print(dates)
+    # check if datafrrame already exists:
+    dfname = os.path.join(out_path, animal_id,'%s_stims_spikes_dataframe.pkl'%animal_id)
 
-    folders = [os.path.join(data_path,'%s'%date) for date in dates]
-    
-    df = pd.DataFrame({'PFC_MU': [], # Spike time relative to stimulus onset
-                       'PFC_SU': [],
-                       'TrialID':[], 
-                       'ItemID':[], # position of stimulus in a trial
-                      'StimID':[],# ID of stimulus being displayed
-                      'StimName':[], # Name of the image
-                      'StimOn':[],
-                      'blockID': [],
-                      'blockType':[],
-                      'date': [],
-                      'StimDur':[],
-                      'ISIDur':[]}) # ID of the block of trials
-    
-    # list with stim IDs per session, located in data directory
-    stim_list = pd.read_excel(os.path.join(data_path,'stim.xlsx'),header=0)
-    
-    for sesID,folder in enumerate(folders):
-        date = dates[sesID]
-        # check if session dataframe exists
-        if os.path.exists(os.path.join(out_path,'%s_stims_spikes_dataframe_%s.pkl'%(animal_id,date))):
-            print('%s: load existing data frame'%date)
-            df_single = pd.read_pickle(os.path.join(out_path,'%s_stims_spikes_dataframe_%s.pkl'%(animal_id,date)))
-        else:
-            print('%s: align spikes and load metadata'%date)
-            # create dataframe for single session
-            df_single = pd.DataFrame({'PFC_MU': [], # Spike time relative to stimulus onset
+    if os.path.isfile(dfname):
+        df = pd.read_pickle(dfname)
+        print('Load existing data frame')
+        
+    # otherwise create it:
+    else:
+        print('Creating data frame')
+        dates = os.listdir(data_path)
+        dates = np.sort([dates[i] for i in range(len(dates)) if dates[i][0]=='2']) # filter
+
+        folders = [os.path.join(data_path,'%s'%date) for date in dates]
+        
+        df = pd.DataFrame({'PFC_MU': [], # Spike time relative to stimulus onset
                            'PFC_SU': [],
-                          'TrialID':[], 
-                          'ItemID':[], # position of stimulus in a trial
+                           'TrialID':[], 
+                           'ItemID':[], # position of stimulus in a trial
                           'StimID':[],# ID of stimulus being displayed
                           'StimName':[], # Name of the image
                           'StimOn':[],
@@ -81,85 +62,145 @@ def getData(data_path,out_path,animal_id):
                           'date': [],
                           'StimDur':[],
                           'ISIDur':[]}) # ID of the block of trials
-            times,IDs,blockID,blockType,trialID,itemID,reward_time,stim_dur,isi_dur = Match_stimuli_ID_to_photodiodes(folder,dates[sesID],out_path)
-            time_between_stim = (float(stim_dur)+float(isi_dur))/1000 # SOA in sec
-            print('SOA:',time_between_stim)
-            
-            # get stim ID form session
-            row = np.where(stim_list['date']==float(dates[sesID]))[0]
-            stimA = np.array(stim_list['A'].iloc[row])[0]
-            stimB = np.array(stim_list['B'].iloc[row])[0]
-            stim_names = [stimA,stimB]
-            print('Stimuli:',stimA,stimB)
-            
-            # get spikes
-            PFC_MU,PFC_SU,ch_num_pfc = getSpikes(folder)
         
-            # align spikes
-            # Multi-unit activity
-            for ch in range(len(PFC_MU)):
-                rowcount = 0
-                spikes = PFC_MU[ch]
-                if len(spikes)>0: # it might be that there is no MU in the channel
+        # list with stim IDs per session, located in data directory
+        stim_list = pd.read_excel(os.path.join(data_path,'stim.xlsx'),header=0)
+        
+        for sesID,folder in enumerate(folders):
+            date = dates[sesID]
+            # check if session dataframe exists
+            if os.path.exists(os.path.join(out_path,'%s_stims_spikes_dataframe_%s.pkl'%(animal_id,date))):
+                print('%s: load existing data frame'%date)
+                df_single = pd.read_pickle(os.path.join(out_path,'%s_stims_spikes_dataframe_%s.pkl'%(animal_id,date)))
+            else:
+                print('%s: align spikes and load metadata'%date)
+                # create dataframe for single session
+                df_single = pd.DataFrame({'PFC_MU': [], # Spike time relative to stimulus onset
+                               'PFC_SU': [],
+                              'TrialID':[], 
+                              'ItemID':[], # position of stimulus in a trial
+                              'StimID':[],# ID of stimulus being displayed
+                              'StimName':[], # Name of the image
+                              'StimOn':[],
+                              'blockID': [],
+                              'blockType':[],
+                              'date': [],
+                              'StimDur':[],
+                              'ISIDur':[]}) # ID of the block of trials
+                times,IDs,blockID,blockType,trialID,itemID,reward_time,stim_dur,isi_dur = Match_stimuli_ID_to_photodiodes(folder,dates[sesID],out_path)
+                time_between_stim = (float(stim_dur)+float(isi_dur))/1000 # SOA in sec
+                print('SOA:',time_between_stim)
+                
+                # get stim ID form session
+                row = np.where(stim_list['date']==float(dates[sesID]))[0]
+                stimA = np.array(stim_list['A'].iloc[row])[0]
+                stimB = np.array(stim_list['B'].iloc[row])[0]
+                stim_names = [stimA,stimB]
+                print('Stimuli:',stimA,stimB)
+                
+                # get spikes
+                PFC_MU,PFC_SU,ch_num_pfc = getSpikes(folder)
+            
+                # align spikes
+                # Multi-unit activity
+                for ch in range(len(PFC_MU)):
+                    rowcount = 0
+                    spikes = PFC_MU[ch]
+                    if len(spikes)>0: # it might be that there is no MU in the channel
+                        spikes /= sf # convert to s
+                        
+                    for s,ph in enumerate(times): #loop through stim in trial
+                        if len(spikes)>0:
+                            sp = spikes[((spikes-ph)>=tmin) & ((spikes-ph)<tmax)] - ph
+                        else:
+                            sp = []
+                        #add to dataframe
+                        if ch==0: # Before all, add to the dataframe the info about stimuli
+                            df_single = df_single.append({'PFC_MU':[],
+                                            'PFC_SU':[],
+                                      'TrialID':trialID[s],
+                                      'ItemID':itemID[s], # position of stimulus in a trial
+                                      'StimOn':times[s],
+                                      'RewardOn':reward_time[s],
+                                      'StimID':IDs[s], # id 0 or 1
+                                      'StimName': stim_names[IDs[s]], # image name
+                                      'blockID': blockID[s], # block ID 0-3
+                                      'blockType':blockType[s], # block type 0 or 1 (xx or xY)
+                                      'date': dates[sesID],
+                                      'StimDur':stim_dur,
+                                      'ISIDur':isi_dur},ignore_index=True)
+                        df_single['PFC_MU'].iloc[rowcount].append(sp)
+                        rowcount += 1
+                    
+                # loop through single units, PFC
+                for ch in range(len(PFC_SU)):
+                    rowcount = 0
+                    spikes = PFC_SU[ch]
                     spikes /= sf # convert to s
-                    
-                for s,ph in enumerate(times): #loop through stim in trial
-                    if len(spikes)>0:
+                    for s,ph in enumerate(times): #loop through stim in trial
                         sp = spikes[((spikes-ph)>=tmin) & ((spikes-ph)<tmax)] - ph
-                    else:
-                        sp = []
-                    #add to dataframe
-                    if ch==0: # Before all, add to the dataframe the info about stimuli
-                        df_single = df_single.append({'PFC_MU':[],
-                                        'PFC_SU':[],
-                                  'TrialID':trialID[s],
-                                  'ItemID':itemID[s], # position of stimulus in a trial
-                                  'StimOn':times[s],
-                                  'RewardOn':reward_time[s],
-                                  'StimID':IDs[s], # id 0 or 1
-                                  'StimName': stim_names[IDs[s]], # image name
-                                  'blockID': blockID[s], # block ID 0-3
-                                  'blockType':blockType[s], # block type 0 or 1 (xx or xY)
-                                  'date': dates[sesID],
-                                  'StimDur':stim_dur,
-                                  'ISIDur':isi_dur},ignore_index=True)
-                    df_single['PFC_MU'].iloc[rowcount].append(sp)
-                    rowcount += 1
-                    
-            # loop through single units, PFC
-            for ch in range(len(PFC_SU)):
-                rowcount = 0
-                spikes = PFC_SU[ch]
-                spikes /= sf # convert to s
-                for s,ph in enumerate(times): #loop through stim in trial
-                    sp = spikes[((spikes-ph)>=tmin) & ((spikes-ph)<tmax)] - ph
-                    
-                    df_single['PFC_SU'].iloc[rowcount].append(sp)
-                    rowcount += 1
-                    
-         
-            # store data frame from single session
-            df_single.to_pickle(os.path.join(out_path,'%s_stims_spikes_dataframe_%s.pkl'%(animal_id,date))) # store the dataframe
-            np.save(os.path.join(out_path,'%s_SU_channel_numbers_PFC_%s.npy'%(animal_id,date)),ch_num_pfc)
-        # append dataframe from single session to total dataframe
-        frames = [df,df_single]
-        df = pd.concat(frames,ignore_index=True,sort=False)
-        
-    df.to_pickle(os.path.join(out_path,'%s_stims_spikes_dataframe.pkl'%animal_id)) # store the dataframe
+                        
+                        df_single['PFC_SU'].iloc[rowcount].append(sp)
+                        rowcount += 1
+                        
+             
+                # store data frame from single session
+                df_single.to_pickle(os.path.join(out_path,'%s_stims_spikes_dataframe_%s.pkl'%(animal_id,date))) # store the dataframe
+                np.save(os.path.join(out_path,'%s_SU_channel_numbers_PFC_%s.npy'%(animal_id,date)),ch_num_pfc)
+            # append dataframe from single session to total dataframe
+            frames = [df,df_single]
+            df = pd.concat(frames,ignore_index=True,sort=False)
+            
+        df.to_pickle(dfname) # store the dataframe
 
     return df
 
-def getPSTH(df_path, animal_id):
-    
-    df = pd.read_pickle(os.path.join(df_path,'%s_stims_spikes_dataframe_%s.pkl'%(animal_id)))
-    
-    dates = np.unique(df.date)
-    ndates = len(dates)
-    nitems = np.max(df.ItemID)
-    stimID = np.unique(df.StimID)
-    nstim = len(stimID)
-    print(list(df.keys()))
-    print('Recording dates:',dates)
+def getPSTH(df, animal_id, outpath, tmin, tmax, binsize, stepsize, stype='last', sd=None):
+    '''
+    compute peri-stimulus time histogram (PSTH) of individual stimulus presentations or sequences (depending on "stype")
+
+    Input:
+    df: data frame with spike times
+    tmin,tmax,binsize,stepsize,sd: sec
+    sd: standard deviation of gaussian kernel. If None > no smoothing
+    stype: last / seq /  aborted
+
+    Output: PSTH matrix [Ntrials x Nchannels x Nbins]
+    '''
+
+    # check if psth exists
+    fname = os.path.join(outpath, animal_id,'%s_psth_%s_%s_%s_%s_%s.pkl'%(animal_id,stype,tmin,tmax,binsize,sd))
+    tname = os.path.join(outpath, animal_id,'t_%s_%s_%s_%s_%s.pkl'%(stype,tmin,tmax,binsize,sd))
+    if os.path.isfile(fname):
+        print('Load existing PSTH')
+        psth = np.load(fname)
+        t = np.load(t)
+
+    else:
+        print('Computing PSTH')
+        t = np.arange(tmin, tmax, stepsize)
+
+        nbins = len(t)
+        nch = len(df['PFC_MU'][0])
+        last_item = np.where(df.ItemID == 3)[0]
+        ntrials = len(last_item)
+
+        # bin spikes from all channels and trials
+        psth = np.zeros((ntrials, nch, nbins))
+
+        for tr in range(ntrials):
+            ind = last_item[tr]
+            psth[tr, :] = rate_binning(df['PFC_MU'].iloc[ind], t, binsize)
+
+        if sd is not None:
+            t = t[int(4 * sd / binsize):-int(4 * sd / binsize)]
+            # gaussian smoothing
+            psth = smoothing(psth, sd, binsize)[:, :, int(4 * sd / binsize):-int(4 * sd / binsize)]  # cut borders: 4*sd
+        np.save(fname, psth)
+        np.save(tname, t)
+
+    return psth,t
+
 
 def rate_binning(spike_times,time_bins,binsize):
     average = np.zeros((len(spike_times),len(time_bins)))
@@ -172,7 +213,7 @@ def rate_binning(spike_times,time_bins,binsize):
 
 
 def smoothing(signal,sd,binsize):
-    ''' aplly gaussian filter per trial'''
+    ''' gaussian filter per trial'''
     kernel = gaussian(signal.shape[-1],sd/binsize)
     ga = np.zeros(signal.shape)
     if len(signal.shape)>3:
